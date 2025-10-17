@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Бронирование зала — Aisana</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --card:#151b23; --muted:#8fa3b8; --text:#e6eef8; --accent:#4da3ff;
+      --bad:#ff5c5c; --border:#243142;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Inter,sans-serif}
+    header{position:sticky;top:0;z-index:5;background:#0b0f14;padding:.8rem;border-bottom:1px solid var(--border)}
+    h1{font-size:1.1rem;margin:.1rem 0 .4rem 0;text-align:center}
+    .toolbar{display:flex;gap:.5rem;flex-wrap:wrap;justify-content:center;padding:0 .5rem}
+    input,select,button{padding:.7rem .8rem;border-radius:.8rem;border:1px solid var(--border);background:var(--card);color:var(--text)}
+    button.primary{background:var(--accent);color:#00162a;border:none;font-weight:600}
+    .wrap{padding:1rem}
+    .hall{display:grid;gap:.4rem;justify-content:center;align-items:start;margin:1rem auto;max-width:1100px}
+    .row{display:flex;justify-content:center;gap:.3rem}
+    .seat{min-width:40px;min-height:40px;border-radius:.7rem;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:600;cursor:pointer}
+    .seat.free{background:#152231}
+    .seat.sold{background:rgba(255,92,92,.12);border-color:#5a2d2d;color:#ff9a9a}
+    .seat.reserved{background:rgba(255,204,0,.12);border-color:#5b4a19;color:#ffe28a}
+    .seat:hover{outline:2px solid rgba(77,163,255,.25)}
+    dialog{border:none;border-radius:1rem;background:var(--card);color:var(--text);max-width:520px;width:92vw}
+    dialog::backdrop{background:rgba(0,0,0,.55)}
+    table{width:100%;border-collapse:collapse;font-size:.9rem;margin-top:.8rem}
+    th,td{border:1px solid var(--border);padding:.4rem .6rem;text-align:center}
+    th{background:var(--card);color:var(--muted)}
+    .right{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
+    .danger{background:var(--bad);color:#fff;border:none}
+    #dataDialog{max-height:90vh;overflow:auto}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Бронирование зала</h1>
+    <div class="toolbar">
+      <input id="eventTitle" placeholder="Название мероприятия (например, Концерт 19:00)" />
+      <input id="search" placeholder="Поиск: ФИО / ряд-место / телефон" />
+      <select id="filter">
+        <option value="all">Все</option>
+        <option value="free">Свободные</option>
+        <option value="sold">Купленные</option>
+        <option value="reserved">Резерв</option>
+      </select>
+      <button id="openTable" class="primary">Просмотр данных</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div id="hall" class="hall"></div>
+  </div>
+
+  <!-- Диалог для редактирования места -->
+  <dialog id="seatDialog">
+    <form method="dialog">
+      <h3 id="seatTitle">Ряд X, Место Y</h3>
+      <label>Статус</label>
+      <select id="status">
+        <option value="free">Свободно</option>
+        <option value="sold">Куплено</option>
+        <option value="reserved">Резерв</option>
+      </select>
+      <label>Способ оплаты</label>
+      <select id="payment">
+        <option value="">—</option>
+        <option>Kaspi QR</option>
+        <option>Перевод</option>
+        <option>Наличные</option>
+      </select>
+      <label>ФИО</label><input id="buyer" placeholder="Имя и фамилия" />
+      <label>Телефон</label><input id="phone" placeholder="+7…" />
+      <div class="right">
+        <button value="cancel">Отмена</button>
+        <button id="saveSeat" value="default" class="primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Диалог с таблицей -->
+  <dialog id="dataDialog">
+    <h3>Данные по местам</h3>
+    <div class="toolbar">
+      <input id="tableSearch" placeholder="Поиск по таблице..." />
+      <button id="exportCSV" class="primary">Экспорт в Excel (CSV)</button>
+      <button id="closeTable">Закрыть</button>
+    </div>
+    <table id="dataTable">
+      <thead>
+        <tr><th>Ряд</th><th>Место</th><th>Статус</th><th>ФИО</th><th>Телефон</th><th>Оплата</th><th>Время</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </dialog>
+
+  <script>
+    const layout = [
+      {row:1,left:10,right:10},
+      {row:2,left:11,right:11},
+      {row:3,left:11,right:11},
+      {row:4,left:12,right:12},
+      {row:5,left:12,right:12},
+      {row:6,left:12,right:12},
+      {row:7,left:13,right:13},
+      {row:8,left:13,right:13},
+      {row:9,left:13,right:13},
+      {row:10,left:13,right:13},
+      {row:11,left:13,right:13},
+      {row:12,left:13,right:13},
+      {row:13,left:11,right:11}
+    ];
+
+    const hall = document.getElementById('hall');
+    const eventTitleEl = document.getElementById('eventTitle');
+    const filterEl = document.getElementById('filter');
+    const searchEl = document.getElementById('search');
+    let state = {};
+    let eventKey = 'default_event';
+
+    function loadState(){
+      const key = localStorage.getItem('current_event') || 'default_event';
+      eventKey = key;
+      const raw = localStorage.getItem(key);
+      state = raw ? JSON.parse(raw) : {};
+      renderHall();
+    }
+
+    function saveState(){
+      localStorage.setItem('current_event', eventKey);
+      localStorage.setItem(eventKey, JSON.stringify(state));
+    }
+
+    eventTitleEl.oninput = ()=>{
+      const title = eventTitleEl.value.trim();
+      if(title) {
+        eventKey = 'event_' + title.replace(/[^a-zA-Z0-9а-яА-Я]/g,'_');
+        saveState();
+        loadState();
+      }
+    };
+
+    function renderHall(){
+      hall.innerHTML='';
+      layout.forEach(r=>{
+        const row=document.createElement('div');
+        row.className='row';
+        for(let i=1;i<=r.left;i++) createSeat(row,r.row,i);
+        const aisle=document.createElement('div');
+        aisle.style.width='40px'; row.appendChild(aisle);
+        for(let i=r.left+1;i<=r.left+r.right;i++) createSeat(row,r.row,i);
+        hall.appendChild(row);
+      });
+    }
+
+    function createSeat(rowEl,r,s){
+      const k=`${r}-${s}`;
+      const data=state[k]||{status:'free'};
+      const seat=document.createElement('button');
+      seat.className=`seat ${data.status}`;
+      seat.innerHTML=`<small>${r}-${s}</small>`;
+      const hay=(data.buyer||'')+(data.phone||'');
+      const q=(searchEl.value||'').toLowerCase();
+      if(filterEl.value!=='all' && data.status!==filterEl.value) seat.style.opacity=.3;
+      if(q && !hay.toLowerCase().includes(q)) seat.style.opacity=.3;
+      seat.onclick=()=>openSeatDialog(r,s);
+      rowEl.appendChild(seat);
+    }
+
+    const dlg=document.getElementById('seatDialog');
+    const statusSel=document.getElementById('status');
+    const paySel=document.getElementById('payment');
+    const buyer=document.getElementById('buyer');
+    const phone=document.getElementById('phone');
+    const seatTitle=document.getElementById('seatTitle');
+
+    function openSeatDialog(r,s){
+      const k=`${r}-${s}`;
+      const data=state[k]||{status:'free'};
+      seatTitle.textContent=`Ряд ${r}, Место ${s}`;
+      statusSel.value=data.status||'free';
+      paySel.value=data.payment||'';
+      buyer.value=data.buyer||'';
+      phone.value=data.phone||'';
+      dlg.showModal();
+      document.getElementById('saveSeat').onclick=(e)=>{
+        e.preventDefault();
+        state[k]={status:statusSel.value,payment:paySel.value,buyer:buyer.value,phone:phone.value,updatedAt:new Date().toLocaleString()};
+        saveState();
+        dlg.close();
+        renderHall();
+      };
+    }
+
+    filterEl.onchange=()=>renderHall();
+    searchEl.oninput=()=>renderHall();
+
+    // таблица
+    const dataDlg=document.getElementById('dataDialog');
+    document.getElementById('openTable').onclick=()=>{ renderTable(); dataDlg.showModal(); };
+    document.getElementById('closeTable').onclick=()=>dataDlg.close();
+    document.getElementById('tableSearch').oninput=()=>renderTable();
+
+    function renderTable(){
+      const tbody=document.querySelector('#dataTable tbody');
+      const q=(document.getElementById('tableSearch').value||'').toLowerCase();
+      tbody.innerHTML='';
+      Object.keys(state).forEach(k=>{
+        const [r,s]=k.split('-');
+        const d=state[k];
+        const row=document.createElement('tr');
+        if(q && !(`${r}-${s} ${d.buyer||''} ${d.phone||''}`.toLowerCase().includes(q))) return;
+        row.innerHTML=`<td>${r}</td><td>${s}</td><td>${d.status}</td><td>${d.buyer||''}</td><td>${d.phone||''}</td><td>${d.payment||''}</td><td>${d.updatedAt||''}</td>`;
+        tbody.appendChild(row);
+      });
+    }
+
+    document.getElementById('exportCSV').onclick=()=>{
+      let csv='Ряд,Место,Статус,ФИО,Телефон,Оплата,Время\\n';
+      Object.keys(state).forEach(k=>{
+        const [r,s]=k.split('-');
+        const d=state[k];
+        csv+=`${r},${s},${d.status||''},${d.buyer||''},${d.phone||''},${d.payment||''},${d.updatedAt||''}\\n`;
+      });
+      const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=(eventTitleEl.value||'hall')+'.csv';
+      a.click();
+    };
+
+    loadState();
+  </script>
+</body>
+</html>
